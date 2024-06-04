@@ -5,7 +5,7 @@
 # COMMAND ----------
 
 def brz_load_end():
-    return r"""
+  return r"""
 -- *----------------------------------------------*
 -- STEP 3: Create/Load existing bronze table
 -- *----------------------------------------------*
@@ -14,10 +14,7 @@ CREATE TABLE {{template_params['main_database']}}.{{schema_dict['File']['ObjectN
 	(
 	{% for col in schema_dict['SourceColumns'] %}
 		{% if loop.index > 1 %},{%- endif -%}
-        {%- if col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-      `{{col['ColumnName']}}` STRING
-      ,`{{col['ColumnName']}}_Cpy` STRING
-        {%- elif col['IsAttributePII'] == True -%}
+        {%- if col['IsAttributePII'] == True -%}
       `{{col['ColumnName']}}` BINARY
         {%- elif col['DataType'] == 'TIMESTAMP' -%}
       `{{col['ColumnName']}}` STRING
@@ -53,44 +50,28 @@ FROM {{template_params['work_database']}}.brz_{{template_params['source_name']|l
 
 ANALYZE TABLE {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}} COMPUTE STATISTICS;;
 
-{#
 -- *----------------------------------------------*
--- STEP 6: Create dynamic view for decrypting PII data for priviliged users
+-- STEP 6: Create views (1-> for all users with no decryption. 2-> for pii-privileged users with decryption.)
 -- *----------------------------------------------*
- DROP VIEW IF EXISTS {{template_params['main_database']}}_piiView.{{schema_dict['File']['ObjectName']}};; 
- #}
- 
- {# 
- CREATE VIEW {{template_params['main_database']}}_piiView.{{schema_dict['File']['ObjectName']}}
- as SELECT 
-       {% for col in schema_dict['SourceColumns'] %}
- 		{% if loop.index > 1 %},{%- endif -%}
-         {%- if col['IsAttributePII'] == True -%}
-         
-           {%- if col['EncryptionType'] == 'FPE' -%}
- 	case when is_member("test_dynamic_view") then udfDecryptAesStatic(`{{col['ColumnName']}}_Cpy`,"${spark.sql.fernet}") else `{{col['ColumnName']}}` end as `{{col['ColumnName']}}`
-          {%- elif col['EncryptionType'] == 'NDET'  -%}
-              `{{col['ColumnName']}}`,
-               case {% for rbac_group in col['RBAC_Code'].split(',') %}
-                   when is_member('{{rbac_group}}') then cast(pii_{{template_params['business_unit_name_code']|lower}}_decrypt_aes_ndet(`{{col['ColumnName']}}`) as {{col['DataType']}} )
-               {% endfor %} else cast(NULL as {{col['DataType']}}) end as `{{col['ColumnName']}}_pii`
-               
-         {%- elif col['EncryptionType'] == 'DET' -%}
-             `{{col['ColumnName']}}`,
-               case {% for rbac_group in col['RBAC_Code'].split(',') %}
-               when is_member('{{rbac_group}}') then cast(pii_{{template_params['business_unit_name_code']|lower}}_decrypt_aes_det(`{{col['ColumnName']}}`) as {{col['DataType']}} )
-                {% endfor %} else cast(NULL as {{col['DataType']}}) end as `{{col['ColumnName']}}_pii`
-               
-          {%-endif-%}
-         {%- else -%}
- 	`{{col['ColumnName']}}`
-         {%- endif -%}
- 	{% endfor %}
- 	 ,`Source_Date`
- 	 ,`Source_Timestamp`
- 	 ,`Process_Start_TimeStamp`
- 	 ,`Source_File_Name`
- 	 ,`Year_Month`
- FROM {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}};; 
- #}
+CREATE OR REPLACE VIEW {{template_params['main_database']}}_vw.{{schema_dict['File']['ObjectName']}}
+as SELECT * FROM {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}};;
+
+CREATE OR REPLACE VIEW {{template_params['main_database']}}_vw.{{schema_dict['File']['ObjectName']}}_decrypt
+as SELECT 
+  {% for col in schema_dict['SourceColumns'] %}
+		{% if loop.index > 1 %},{%- endif -%}
+      {%- if col['IsAttributePII'] == True -%}
+  `{{col['ColumnName']}}`,
+	case when is_member("pii-privileged") then cast(cast(aes_decrypt(`{{col['ColumnName']}}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING) as {{col['DataType']}})
+    else cast(NULL as {{col['DataType']}}) end as `{{col['ColumnName']}}_decrypt`
+        {%- else -%}
+	`{{col['ColumnName']}}`
+        {%- endif -%}
+	{% endfor %}
+  ,`Source_Date`
+  ,`Source_Timestamp`
+  ,`Process_Start_TimeStamp`
+  ,`Source_File_Name`
+  ,`Year_Month`
+FROM {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}};;
 """
