@@ -13,10 +13,7 @@ DROP TABLE IF EXISTS {{template_params['business_unit_name_code']}}_brz_{{templa
 CREATE TABLE {{template_params['business_unit_name_code']}}_brz_{{template_params['sourceName']|lower}}.{{schema_dict['File']['ObjectName']}}
 	({% for col in schema_dict['SourceColumns'] %}
       {% if loop.index > 1 %},{%- endif -%}
-      {%- if col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-      `{{col['ColumnName']}}` STRING
-      ,`{{col['ColumnName']}}_Cpy` STRING
-      {%- elif col['IsAttributePII'] == True -%}
+      {%- if col['IsAttributePII'] == True -%}
       `{{col['ColumnName']}}` BINARY
       {%- elif col['DataType'] == 'TIMESTAMP' -%}
       `{{col['ColumnName']}}` STRING
