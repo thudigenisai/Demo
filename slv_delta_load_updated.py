@@ -42,9 +42,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 			{%- if  col['DataType'] == 'TIMESTAMP' -%}
 		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 		,`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
-			{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-		,`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
 			{%- else -%}
 		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 			{%- endif -%}{##}  
@@ -80,9 +77,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 					{%- if  col['DataType'] == 'TIMESTAMP' -%}
 				,stg.`{{col['ColumnName']}}` 
 				,stg.`{{col['ColumnName']}}_Aet`
-					{%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-				,stg.`{{col['ColumnName']}}` 
-				,stg.`{{col['ColumnName']}}_Cpy`
 					{%- else -%}
 				,stg.`{{col['ColumnName']}}`
 					{%- endif -%}  
@@ -122,9 +116,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 					{%- if  col['DataType'] == 'TIMESTAMP' -%}
 				,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 				,slv.`{{col['ColumnName']}}_Aet` as`{{col['ColumnName']}}_Aet`
-					{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE'-%}
-				,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-				,slv.`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
 					{%- else -%}
 				,slv.`{{col['ColumnName']}}`
 					{%- endif -%}  
