@@ -4,11 +4,6 @@
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ##### Silver - Full Load Jinja2 template
-
-# COMMAND ----------
-
 def slv_full():
     return r"""
 -- *----------------------------------------------*
@@ -69,10 +64,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
         ,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
         ,`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
         {##}
-            {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-        ,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-        ,`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
-        {##}
             {%- else -%}
         ,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
         {##}
@@ -88,7 +79,7 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
             -- *----------------------------------------------*
             -- STEP 4.2.2: Identify silver records to be updated
             -- 1) silver records with same Pk_Hash identified from step 4.1
-            -- 2) silver records that have a Pk_Hash that does not exist in staging dataset and max effective_dttm of staging dataset is greater than or equal to silver effective_dttm (soft delete)
+            -- 2) silver records that have a Pk_Hash that does not exist in staging dataset if a soft delete for the particular time period has not occurred before
             -- *----------------------------------------------*	
             (
             SELECT 
@@ -111,10 +102,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
                 ,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
                 ,slv.`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
                 {##}
-                    {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-                ,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-                ,slv.`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
-                {##}
                     {%- else -%}
                 ,slv.`{{col['ColumnName']}}`
                 {##}
@@ -125,8 +112,7 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
             FROM  {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}} as slv
             WHERE (EXISTS(SELECT 1 FROM staging_records_to_update_silver as stg WHERE slv.`pk_hash`=stg.`pk_hash`))
                 OR NOT EXISTS (SELECT 1 FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg as stg WHERE stg.`pk_hash`=slv.`pk_hash`)
-                   AND slv.`is_current`=true AND slv.`record_type` <> 'D'
-                   AND CAST((SELECT MAX(`effective_dttm`) FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg) as TIMESTAMP) >= CAST(slv.`effective_dttm` as TIMESTAMP) -- to update silver records for soft deletes - ensure that late landing records do not soft delete newer records inserted in silver table
+                AND EXISTS(SELECT 1 FROM {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}} as sub_slv WHERE sub_slv.`pk_hash` = slv.`pk_hash` AND sub_slv.`record_type`<>'D' AND CAST((SELECT MAX(`effective_dttm`) FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg as stg) as TIMESTAMP) BETWEEN sub_slv.`effective_dttm` AND sub_slv.`expiry_dttm`)
             )
             UNION ALL
 
@@ -157,10 +143,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
                     {%- if  col['DataType'] == 'TIMESTAMP' -%}
                 ,stg.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
                 ,stg.`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
-                {##}
-                    {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-                ,stg.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-                ,stg.`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
                 {##}
                     {%- else -%}
                 ,stg.`{{col['ColumnName']}}`
@@ -207,10 +189,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
                 ,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
                 ,slv.`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
                 {##}
-                    {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-                ,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-                ,slv.`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
-                {##}
                     {%- else -%}
                 ,slv.`{{col['ColumnName']}}`
                 {##}
@@ -220,10 +198,9 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
                  ,slv.`year_month` as `year_month`
                  {##}
             FROM  {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}} as slv
-            WHERE 	slv.`is_current`=true
-                AND slv.`record_type` <> 'D'
-                AND NOT EXISTS (SELECT 1 FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg as stg WHERE stg.`pk_hash`=slv.`pk_hash`)
-                AND CAST((SELECT MAX(`effective_dttm`) FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg) as TIMESTAMP) >= CAST(slv.`effective_dttm` as TIMESTAMP) -- ensure that late landing records do not soft delete newer records inserted in silver table
+            WHERE slv.`record_type` <> 'D'
+                  AND NOT EXISTS (SELECT 1 FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg as stg WHERE stg.`pk_hash`=slv.`pk_hash`)
+                  AND CAST((SELECT MAX(`effective_dttm`) FROM {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg) as TIMESTAMP) BETWEEN slv.`effective_dttm` AND slv.`expiry_dttm` 
             )
         )
     );;
