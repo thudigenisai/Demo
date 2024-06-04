@@ -8,8 +8,8 @@
 
 def ctlfwk_query(query):
     '''Returns a dataframe of results from the control framework sql database for a specified query'''
-    ctlfwk_host = dbutils.secrets.get(scope = "acumen-key-vault-scope", key = "sqldb-ctlfwk-host")
-    ctlfwk_db = dbutils.secrets.get(scope = "acumen-key-vault-scope", key = "sqldb-ctlfwk-db")
+    ctlfwk_host = sql("SELECT value FROM ops.environment WHERE key = 'ctlfwk-host'").collect()[0][0]
+    ctlfwk_db = sql("SELECT value FROM ops.environment WHERE key = 'ctlfwk-db'").collect()[0][0]
     
     url = "jdbc:sqlserver://{0};databaseName={1};".format(ctlfwk_host, ctlfwk_db)
     
@@ -19,8 +19,8 @@ def ctlfwk_query(query):
             .option("url", url) \
             .option("query", query) \
             .option("authentication", "ActiveDirectoryServicePrincipal") \
-            .option("aadSecurePrincipalId", dbutils.secrets.get(scope = "acumen-key-vault-scope", key = "adb-sp-client-id")) \
-            .option("aadSecurePrincipalSecret", dbutils.secrets.get(scope = "acumen-key-vault-scope", key = "adb-sp-client-secret")) \
+            .option("aadSecurePrincipalId", sql("select value from ops.environment where key = 'databricks-sp-id'").collect()[0][0]) \
+            .option("aadSecurePrincipalSecret", dbutils.secrets.get(scope = "intelliversesecrets", key = "edp-common-databricks-operational-sp-secret")) \
             .option("encrypt", "true") \
             .option("hostNameInCertificate", "*.database.windows.net") \
             .load()
