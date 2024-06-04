@@ -38,13 +38,8 @@ CREATE TABLE {{template_params['work_database']}}.brz_{{template_params['source_
 	SELECT
 	{% for col in schema_dict['SourceColumns'] %}
 	  {% if loop.index > 1 %},{%- endif -%}
-      {%- if col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-      CAST(`{{col['ColumnName']}}` AS STRING) as `{{col['ColumnName']}}`
-      ,CAST(`{{col['ColumnName']}}` AS STRING) as `{{col['ColumnName']}}_Cpy`
-      {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'DET' -%}
-      encrypt_scala_det_binary(CAST({% if col['DataType'] == 'DATE' %}to_date(`{{col['ColumnName']}}`,'{{col['Format']['InputFormatString']}}'){% else %}`{{col['ColumnName']}}`{% endif %} AS STRING)) as `{{col['ColumnName']}}`
-      {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET' -%}
-      encrypt_scala_ndet_binary(CAST({% if col['DataType'] == 'DATE' %}to_date(`{{col['ColumnName']}}`,'{{col['Format']['InputFormatString']}}'){% else %}`{{col['ColumnName']}}`{% endif %} AS STRING)) as `{{col['ColumnName']}}`
+      {%- if col['IsAttributePII'] == True -%}
+      aes_encrypt(cast(cast({% if col['DataType'] == 'DATE' %}to_date(`{{col['ColumnName']}}`,'{{col['Format']['InputFormatString']}}'){% else %}`{{col['ColumnName']}}`{% endif %} as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as `{{col['ColumnName']}}`
       {%- elif col['DataType'] == 'TIMESTAMP' -%}
       CAST(`{{col['ColumnName']}}` AS STRING) as `{{col['ColumnName']}}`
       {%- elif col['DataType'] == 'DATE' -%}
