@@ -26,10 +26,10 @@ class TemplateExecutor():
   @staticmethod
   def create_databases(self, layer, schema_or_source):
     '''Create database schemas for specified layer'''
-    assert layer in ('brz', 'slv', 'gld','plt'), 'Invalid layer specified'
+    assert layer in ('brz', 'slv', 'gld'), 'Invalid layer specified'
     assert len(self.inputs['business_unit_name_code'])>0 and len(schema_or_source)>0, 'Invalid business_unit_name_code or source_app_name'
     sql('CREATE DATABASE IF NOT EXISTS ' + self.inputs['main_db_prefix'] + self.inputs['business_unit_name_code'].lower() + '_' + layer + '_' + schema_or_source.lower())
-    sql('CREATE DATABASE IF NOT EXISTS ' + self.inputs['main_db_prefix'] + self.inputs['business_unit_name_code'].lower() + '_' + layer + '_' + schema_or_source.lower() + '_PiiView')
+    sql('CREATE DATABASE IF NOT EXISTS ' + self.inputs['main_db_prefix'] + self.inputs['business_unit_name_code'].lower() + '_' + layer + '_' + schema_or_source.lower() + '_vw')
     sql('CREATE DATABASE IF NOT EXISTS ' + self.inputs['work_db_prefix'] + self.inputs['business_unit_name_code'].lower() + '_work')
   
   @staticmethod
@@ -40,8 +40,8 @@ class TemplateExecutor():
       folder_path = folder_path + "/" + object_name  # set up folder paths
       
     if len(self.inputs['adls_prefix'])>0:
-      return self.inputs['adls_prefix'] + "/mnt/" + container + "/" + folder_path
-    return  "abfss://" + container + "@" + self.inputs['storage_account'] + ".dfs.core.windows.net/" + folder_path
+      return self.inputs['adls_prefix'] + "/mnt/" + container.replace('uplift-','') + "/" + folder_path
+    return  "abfss://" + container.replace('uplift-','') + "@" + self.inputs['storage_account'] + ".dfs.core.windows.net/" + folder_path
   
   @staticmethod  
   def execute_with_retry(self, query):
@@ -92,8 +92,8 @@ class TemplateExecutorBronzeSilver(TemplateExecutor):
 
 # COMMAND ----------
 
-class TemplateExecutorGoldPlatinum(TemplateExecutor):
-  '''Specific functions for goldPlatinum runs'''
+class TemplateExecutorGold(TemplateExecutor):
+  '''Specific functions for gold runs'''
   def get_database_schema(self):
     return self.schema_dict['schema_name']
   
@@ -103,7 +103,7 @@ class TemplateExecutorGoldPlatinum(TemplateExecutor):
     assert len(self.schema_dict['schema_name'])>0, 'Invalid schema name in JSON schema'
     assert len(self.schema_dict['object_name'])>0, 'Invalid object name in JSON schema'
     
-    self.merge_table_path = self.generate_adls_path(self, "wip", self.inputs['Layer']+"_merge/" + self.schema_dict['schema_name'], self.schema_dict['object_name']) + "/" + self.inputs['pipeline_run_id'] + "/" +str(int(time.time()))
+    self.merge_table_path = self.generate_adls_path(self, "uplift-wip", "gld_merge/" + self.schema_dict['schema_name'], self.schema_dict['object_name']) + "/" + self.inputs['pipeline_run_id'] + "/" +str(int(time.time()))
     
     if self.inputs['load_type'] == 'R':
       self.outgoing_path = self.generate_adls_path(self, out_container, self.schema_dict['schema_name'])
