@@ -7,7 +7,7 @@
 # MAGIC * This notebook is called by ADF and ADF supplies the input parameters, including the schema information in JSON format.
 # MAGIC * General and load specific Jinja2 templates are rendered using the schema and input parameters. This produces a set of SQL queries.
 # MAGIC * SQL queries are executed to process the data from bronze to silver.
-# MAGIC * Silver table includes primary key columns, business columns (where ignore=false) and audit columns.
+# MAGIC * Silver table includes primary key columns, business columns (where ignore=false) and BUPA audit columns.
 
 # COMMAND ----------
 
@@ -17,15 +17,6 @@
 # COMMAND ----------
 
 # MAGIC %run ../utilities/data_quality_validator
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Import PII functionality
-
-# COMMAND ----------
-
-# MAGIC %run ../utilities/PiiExecuteAes
 
 # COMMAND ----------
 
@@ -43,7 +34,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run dp-databricks-logging-py/Logging
+# MAGIC %run deploy/dp-databricks-logging-py/Logging
 
 # COMMAND ----------
 
@@ -73,10 +64,6 @@
 # COMMAND ----------
 
 # MAGIC %run ../patterns/slv_insert_load
-
-# COMMAND ----------
-
-##%run ../patterns/slv_insert_overwrite_load
 
 # COMMAND ----------
 
@@ -215,7 +202,9 @@ def get_tpl_params(exe_obj):
     "pk_hash_cols" : get_hash_cols(exe_obj, key_columns_exist=key_columns_exist),
     "row_hash_cols" : get_hash_cols(exe_obj, key_columns_exist=False),
     "work_database" : exe_obj.inputs['work_db_prefix'] + exe_obj.inputs['business_unit_name_code'].lower() + '_work',
-    "main_database" : exe_obj.inputs['business_unit_name_code'].lower() + '_slv_' + exe_obj.inputs['source_app_name'].lower()
+    "main_database" : exe_obj.inputs['business_unit_name_code'].lower() + '_slv_' + exe_obj.inputs['source_app_name'].lower(),
+    "secret_scope_name" : "intelliversesecrets",
+    "encryption_key_name" : "adb-encryption-key"
   }
   return tpl_params
 
@@ -234,8 +223,6 @@ def get_load_template(load_type):
     template = slv_delta()
   elif load_type=="I":
     template = slv_insert()
-  elif load_type=="IO":
-    template = slv_insert_overwrite()
   elif load_type=="T":
     template = slv_truncate()
   elif load_type=="F":
@@ -251,7 +238,7 @@ def get_load_template(load_type):
 def run_silver(exe_obj, tpl_params, dq, op_process):
   '''Runs silver patterns'''
   # load bronze table
-  ##exe_obj.execute_queries(template=slv_generic_brz_load(), template_params=tpl_params, query_delim=';;', log=op_process)
+  exe_obj.execute_queries(template=slv_generic_brz_load(), template_params=tpl_params, query_delim=';;', log=op_process)
   
   # get maximum Year_Month of bronze table for truncate load only
   if exe_obj.inputs['load_type'] == 'T':
@@ -260,13 +247,13 @@ def run_silver(exe_obj, tpl_params, dq, op_process):
   # start execution of generic silver queries
   exe_obj.execute_queries(template=slv_generic_start(), template_params=tpl_params, query_delim=';;', log=op_process)
   
-#   with op_process.operation("Data Quality Check") as op:
-#     # run data quality checks and end notebook execution if checks failed
-#     dq.run_dq_check(op)
-#     op.info("DQ status", extra={"status": dq.dq_status})
-#     if dq.dq_status == 'fail':
-#       op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
-#       raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + dq.dq_data_doc_url)
+  with op_process.operation("Data Quality Check") as op:
+    # run data quality checks and end notebook execution if checks failed
+    dq.run_dq_check(op)
+    op.info("DQ status", extra={"status": dq.dq_status})
+    if dq.dq_status == 'fail':
+      op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
+      raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + dq.dq_data_doc_url)
   
   # execute load specific queries
   exe_obj.execute_queries(template=get_load_template(exe_obj.inputs['load_type']), template_params=tpl_params, query_delim=';;', log=op_process)
@@ -296,7 +283,7 @@ try:
     configure_adls_access(lyr_inputs.inputs['business_unit_name_code'])
     
     # create a layer process - kicks off all initial tasks
-    slv_exe = TemplateExecutorBronzeSilver('bronze','silver','quarantine', 'slv', lyr_inputs)
+    slv_exe = TemplateExecutorBronzeSilver('uplift-bronze','uplift-silver','uplift-quarantine', 'slv', lyr_inputs)
 
     # create python dictionary with additional parameters for template rendering
     tpl_params = get_tpl_params(slv_exe)
