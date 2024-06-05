@@ -20,12 +20,12 @@
 # MAGIC lazy val sha = java.lang.ThreadLocal.withInitial(() =>java.security.MessageDigest.getInstance("SHA-256"))
 # MAGIC
 # MAGIC val business_unit_name_code = dbutils.widgets.get("business_unit_name_code")
-# MAGIC val scope_name = "acumen-key-vault-scope"
-# MAGIC val key_name =  "adb-hash-pepper"
+# MAGIC val scope_name = "intelliversesecrets"
+# MAGIC val key_name =  "edp-" + business_unit_name_code + "-hash-pepper"
 # MAGIC
 # MAGIC // Retrieve pepper from key vault
 # MAGIC val pepper = Base64.getDecoder().decode(dbutils.secrets.get(scope = scope_name, key = key_name))
-# MAGIC //val pepper = Base64.getDecoder().decode(key_name) 
+# MAGIC
 # MAGIC // Define UDF function, read in sequence of values, append with pepper then return SHA2 hash
 # MAGIC spark.udf.register(
 # MAGIC   "secure_hash",
@@ -33,7 +33,3 @@
 # MAGIC     sha.get().digest(cols.mkString(sep).getBytes() ++ pepper)
 # MAGIC   }
 # MAGIC )
-
-# COMMAND ----------
-
-
