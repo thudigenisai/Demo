@@ -64,9 +64,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 			{%- if  col['DataType'] == 'TIMESTAMP' -%}
 		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 		,`{{col['ColumnName']}}_Aet` as `{{col['ColumnName']}}_Aet`
-			{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-		,`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
 			{%- else -%}
 		,`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 			{%- endif -%}{##}  
@@ -103,9 +100,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 					{%- if  col['DataType'] == 'TIMESTAMP' -%}
 				,stg.`{{col['ColumnName']}}` 
 				,stg.`{{col['ColumnName']}}_Aet`
-					{%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-				,stg.`{{col['ColumnName']}}` 
-				,stg.`{{col['ColumnName']}}_Cpy`
 					{%- else -%}
 				,stg.`{{col['ColumnName']}}`
 					{%- endif -%}  
@@ -131,7 +125,7 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
             -- 2) silver records with same Pk_Hash and Row_Hash as a staging record and silver record is not a current record
             -- 3) silver records with same Pk_Hash and Row_Hash as a staging record and silver record is current and soft deleted and staging record is a re-insertion or vice-versa
 			(
-			SELECT
+			SELECT 	
 				slv.`Pk_Hash` as `Pk_Hash`
 				 ,slv.`Row_Hash` as `Row_Hash`
 				 ,CAST(slv.`Effective_Dttm` AS TIMESTAMP) as `Effective_Dttm`
@@ -150,9 +144,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 					{%- if  col['DataType'] == 'TIMESTAMP' -%}
 				,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
 				,slv.`{{col['ColumnName']}}_Aet` as`{{col['ColumnName']}}_Aet`
-					{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE'-%}
-				,slv.`{{col['ColumnName']}}` as `{{col['ColumnName']}}`
-				,slv.`{{col['ColumnName']}}_Cpy` as `{{col['ColumnName']}}_Cpy`
 					{%- else -%}
 				,slv.`{{col['ColumnName']}}`
 					{%- endif -%}  
@@ -186,7 +177,7 @@ WHERE 	EXISTS(SELECT 1 FROM {{template_params['work_database']}}.slv_{{template_
 -- *----------------------------------------------*
 INSERT INTO {{template_params['main_database']}}.{{schema_dict['File']['ObjectName']}}
 PARTITION (`Year_Month`)
-SELECT
+SELECT 
 	`Pk_Hash`
 	 ,`Row_Hash`
 	 ,`Effective_Dttm`
@@ -206,10 +197,6 @@ SELECT
 	,`{{col['ColumnName']}}`
 	,`{{col['ColumnName']}}_Aet`
 		{##}
-		{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-	,`{{col['ColumnName']}}` 
-	,`{{col['ColumnName']}}_Cpy`
-		{##}
 		{%- else -%}
 	,`{{col['ColumnName']}}`
 		{##}
@@ -227,8 +214,7 @@ ANALYZE TABLE {{template_params['main_database']}}.{{schema_dict['File']['Object
 DROP TABLE IF EXISTS {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg;;
 CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceName']|lower}}_{{schema_dict['File']['ObjectName']}}_stg
 	AS
-	SELECT
- 	  `Pk_Hash` 
+	SELECT `Pk_Hash` 
 	 ,`Row_Hash`
 	 ,`Effective_Dttm` 
 	 ,`Expiry_Dttm` 
@@ -246,10 +232,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 		{%- if  col['DataType'] == 'TIMESTAMP' -%}
 	,`{{col['ColumnName']}}` 
 	,`{{col['ColumnName']}}_Aet`
-		{##}
-		{%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'FPE' -%}
-	,`{{col['ColumnName']}}` 
-	,`{{col['ColumnName']}}_Cpy`
 		{##}
 		{%- else -%}
 	,`{{col['ColumnName']}}`
