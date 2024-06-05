@@ -14,16 +14,13 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 	USING DELTA
 	AS
     SELECT * 
-            ,ROW_NUMBER() OVER(PARTITION BY `Pk_Hash`, `Row_Hash`, (CASE WHEN `Record_Type`='D' THEN `Record_Type` ELSE NULL END) ORDER BY `Effective_Dttm` DESC) AS `Dup_Cnt`  
+      ,ROW_NUMBER() OVER(PARTITION BY `Pk_Hash`, `Row_Hash`, (CASE WHEN `Record_Type`='D' THEN `Record_Type` ELSE NULL END) ORDER BY `Effective_Dttm` DESC) AS `Dup_Cnt`  
     FROM
-	(SELECT 
- 			secure_hash(array(
+	(SELECT secure_hash(array(
 			{%- for col, tag in template_params['pk_hash_cols'].items() -%}
               {%- if loop.index > 1 -%},{%- endif -%}
-              {%- if tag['encryption_type'] == 'NDET' -%}
-                COALESCE(decrypt_scala_ndet_binary(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`),"")
-              {%- elif tag['encryption_type'] == 'DET' -%}
-                COALESCE(decrypt_scala_det_binary(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`),"")
+              {%- if tag['encryption_type'] in ['DET', 'NDET'] -%}
+              COALESCE(cast(aes_decrypt(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if tag['encryption_type'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING),"")
               {%- else  -%}
                 COALESCE(cast(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}` as STRING),"")
               {%- endif -%}
@@ -31,11 +28,9 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 			{% endfor %}),'|')  AS `Pk_Hash`
         ,secure_hash(array(
 			{%- for col, tag in template_params['row_hash_cols'].items() -%}
-			  {%- if loop.index > 1 -%},{%- endif -%}
-              {%- if tag['encryption_type'] == 'NDET' -%}
-                COALESCE(decrypt_scala_ndet_binary(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`),"")
-              {%- elif tag['encryption_type'] == 'DET' -%}
-                COALESCE(decrypt_scala_det_binary(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`),"")
+			  			{%- if loop.index > 1 -%},{%- endif -%}
+              {%- if tag['encryption_type'] in ['DET', 'NDET'] -%}
+              COALESCE(cast(aes_decrypt(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if tag['encryption_type'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING),"")
               {%- else  -%}
                 COALESCE(cast(b.`{{col}}{%- if tag['data_type']=='TIMESTAMP' -%}_Aet{%- endif -%}` as STRING),"")
               {%- endif -%}
@@ -60,9 +55,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
             {%- if  col['DataType'] == 'TIMESTAMP' -%}
         ,b.`{{col['ColumnName']}}`
         ,b.`{{col['ColumnName']}}_Aet`{##}
-             {%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-        ,b.`{{col['ColumnName']}}`
-        ,b.`{{col['ColumnName']}}_Cpy`{##}
              {%- else -%}
         ,b.`{{col['ColumnName']}}`{##}
              {%- endif -%}  
@@ -80,11 +72,7 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 		,Source_File_Name AS `Source_File_Name`
 		,'{{template_params['sourceName']}}' AS `Source_App_Name`{##}
 		{##}{%- if template_params['load_type']=='IUD' and template_params['IUDOn'] -%}
-		, CASE WHEN `{{template_params['IUDCol']}}` == '{{schema_dict['File']['DeleteCDCValue']}}' THEN 'D'
-               WHEN `{{template_params['IUDCol']}}` == '{{schema_dict['File']['InsertCDCValue']}}' THEN 'I'
-               WHEN `{{template_params['IUDCol']}}` == '{{schema_dict['File']['UpdateCDCValue']}}' THEN 'U'
-               ELSE upper(substring(`{{template_params['IUDCol']}}`,0,1))
-          END AS `Record_Type`
+		,upper(substring(`{{template_params['IUDCol']}}`,0,1)) AS `Record_Type`
 		 {%- else -%} 
 		,'I' AS `Record_Type`
 		 {%- endif -%}{##}
@@ -93,80 +81,58 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 		,'{{template_params['pipelineRunID']}}' AS `Process_Instance_Id` 
 		,CAST(null AS TIMESTAMP) AS `Update_Process_Instance_Id` 
 		,CAST(1 AS BOOLEAN) AS `Is_Current`
-		{##}{%- for col in schema_dict['SourceColumns'] -%}
+		{##}{% for col in schema_dict['SourceColumns'] %}
 		  {%- if  not(col['Ignore']) or col['IsKeyColumn'] -%} 
-		  	{%- if  col['Nullable'] -%}
+		  	{%- if  col['Nullable'] or (not(col['Nullable']) and not(col['DefaultValueIfNotNull'])) -%}
               {%- if  col['DataType'] == 'TIMESTAMP' and col['Format']['TimeZone']!=None -%}
 		,`{{col['ColumnName']}}`
-        {%-if col['IsAttributePII'] == True and col['EncryptionType'] == 'DET' -%}
-        ,encrypt_scala_det_binary(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(decrypt_scala_det_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") as STRING)) AS `{{col['ColumnName']}}_Aet`
-        {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET' -%}
-        ,encrypt_scala_ndet_binary(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(decrypt_scala_ndet_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne")as STRING)) AS `{{col['ColumnName']}}_Aet`
+        {##}{%-if col['IsAttributePII'] == True -%}
+		,aes_encrypt(cast(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(cast(aes_decrypt(`{{col['ColumnName']}}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) AS `{{col['ColumnName']}}_Aet`
         {%- else -%}
-        ,from_utc_timestamp(to_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
+		,from_utc_timestamp(to_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
         {%- endif -%}
         {##}
               {%- elif  col['DataType'] == 'TIMESTAMP' and col['Format']['TimeZone']==None -%}
 		,`{{col['ColumnName']}}`
-        {%-if col['IsAttributePII'] == True and col['EncryptionType'] == 'DET' -%}
-        ,encrypt_scala_det_binary(cast(from_utc_timestamp(to_timestamp(decrypt_scala_det_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne")as STRING)) AS `{{col['ColumnName']}}_Aet`
-        {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET' -%}
-        ,encrypt_scala_ndet_binary(cast(from_utc_timestamp(to_timestamp(decrypt_scala_ndet_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne")as STRING)) AS `{{col['ColumnName']}}_Aet`
+        {##}{%-if col['IsAttributePII'] == True -%}
+		,aes_encrypt(cast(cast(from_utc_timestamp(to_timestamp(cast(aes_decrypt(`{{col['ColumnName']}}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne") as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) AS `{{col['ColumnName']}}_Aet`
         {%- else -%}
-        ,from_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
+		,from_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
         {%- endif -%}
         {##}
-              {%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-		,`{{col['ColumnName']}}`
-		,`{{col['ColumnName']}}_Cpy`
-		{##}
               {%- else -%}
 		,`{{col['ColumnName']}}`
 		  {##}
               {%- endif -%}
 		  	{%- else -%}
               {%- if  col['DataType'] == 'TIMESTAMP' and col['Format']['TimeZone']!=None  -%}
-        {%-if col['IsAttributePII'] == True and col['EncryptionType'] == 'DET' -%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_det_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-        ,COALESCE(encrypt_scala_det_binary(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(decrypt_scala_det_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") as STRING)), encrypt_scala_det_binary(CAST('{{col['DefaultValueIfNotNull']}}' as STRING))) AS `{{col['ColumnName']}}_Aet`
-        {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET' -%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_ndet_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-        ,COALESCE(encrypt_scala_ndet_binary(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(decrypt_scala_ndet_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne")as STRING)), encrypt_scala_ndet_binary(CAST('{{col['DefaultValueIfNotNull']}}' as STRING))) AS `{{col['ColumnName']}}_Aet`
+        {##}{%-if col['IsAttributePII'] == True -%}
+		,nvl(`{{col['ColumnName']}}`, aes_encrypt(cast(cast('{{col['DefaultValueIfNotNull']}}' as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %})) AS `{{col['ColumnName']}}`
+		,COALESCE(aes_encrypt(cast(cast(from_utc_timestamp(to_utc_timestamp(to_timestamp(cast(aes_decrypt(`{{col['ColumnName']}}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}), aes_encrypt(cast(cast('{{col['DefaultValueIfNotNull']}}' as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %})) AS `{{col['ColumnName']}}_Aet`
         {%- else -%}
 		,nvl(`{{col['ColumnName']}}`,'{{col['DefaultValueIfNotNull']}}') AS `{{col['ColumnName']}}`
-        ,COALESCE(from_utc_timestamp(to_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne"), CAST('{{col['DefaultValueIfNotNull']}}' as TIMESTAMP)) AS `{{col['ColumnName']}}_Aet`
+		,from_utc_timestamp(to_utc_timestamp(to_timestamp(nvl(`{{col['ColumnName']}}`, '{{col['DefaultValueIfNotNull']}}'), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), '{{col['Format']['TimeZone']}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
         {%- endif -%}
         {##}
                {%- elif  col['DataType'] == 'TIMESTAMP' and col['Format']['TimeZone']==None -%}
-        {%-if col['IsAttributePII'] == True and col['EncryptionType'] == 'DET' -%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_det_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-        ,COALESCE(encrypt_scala_det_binary(cast(from_utc_timestamp(to_timestamp(decrypt_scala_det_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne")as STRING)), encrypt_scala_det_binary(CAST('{{col['DefaultValueIfNotNull']}}' as STRING))) AS `{{col['ColumnName']}}_Aet`
-        {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET' -%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_ndet_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-        ,COALESCE(encrypt_scala_ndet_binary(cast(from_utc_timestamp(to_timestamp(decrypt_scala_ndet_binary(`{{col['ColumnName']}}`), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne")as STRING)), encrypt_scala_ndet_binary(CAST('{{col['DefaultValueIfNotNull']}}' as STRING))) AS `{{col['ColumnName']}}_Aet`
+        {##}{%-if col['IsAttributePII'] == True -%}
+		,nvl(`{{col['ColumnName']}}`,aes_encrypt(cast(cast('{{col['DefaultValueIfNotNull']}}' as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %})) AS `{{col['ColumnName']}}`
+		,COALESCE(aes_encrypt(cast(cast(from_utc_timestamp(to_timestamp(cast(aes_decrypt(`{{col['ColumnName']}}`, secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}) as STRING), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne") as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %}), aes_encrypt(cast(cast('{{col['DefaultValueIfNotNull']}}' as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %})) AS `{{col['ColumnName']}}_Aet`
         {%- else -%}
-        ,nvl(`{{col['ColumnName']}}`,'{{col['DefaultValueIfNotNull']}}') AS `{{col['ColumnName']}}`
-        ,COALESCE(from_utc_timestamp(to_timestamp(`{{col['ColumnName']}}`, '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne"), CAST('{{col['DefaultValueIfNotNull']}}' as TIMESTAMP)) AS `{{col['ColumnName']}}_Aet`
-        {%- endif -%}
-		{##}		
-               {%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
 		,nvl(`{{col['ColumnName']}}`,'{{col['DefaultValueIfNotNull']}}') AS `{{col['ColumnName']}}`
-		,`{{col['ColumnName']}}_Cpy`
-		{##}		
-               {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'DET'-%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_det_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-		{##}
-               {%- elif col['IsAttributePII'] == True and col['EncryptionType'] == 'NDET'-%}
-		,nvl(`{{col['ColumnName']}}`,encrypt_scala_ndet_binary('{{col['DefaultValueIfNotNull']}}')) AS `{{col['ColumnName']}}`
-		{##}
-                              {%- else -%}
+		,from_utc_timestamp(to_timestamp(nvl(`{{col['ColumnName']}}`, '{{col['DefaultValueIfNotNull']}}'), '{{col['Format']['InputFormatString'].replace("'","\\'")}}'), "Australia/Melbourne") AS `{{col['ColumnName']}}_Aet`
+        {%- endif -%}
+		{##}			
+               {%- elif col['IsAttributePII'] == True -%}
+		,nvl(`{{col['ColumnName']}}`,aes_encrypt(cast(cast('{{col['DefaultValueIfNotNull']}}' as STRING) as BINARY), secret('{{template_params['secret_scope_name']}}', '{{template_params['encryption_key_name']}}'),{% if col['EncryptionType'] == 'NDET' %}'GCM'{% else %}'ECB'{% endif %})) AS `{{col['ColumnName']}}`
+				{%- else -%}
 		,nvl(`{{col['ColumnName']}}`,CAST('{{col['DefaultValueIfNotNull']}}' as {{col['DataType']}})) AS `{{col['ColumnName']}}`
-		 {##}
+		{##}
                {%- endif -%}
 		  	{%- endif -%}  
 		  {%- endif -%}{##}
 		{%- endfor -%}
-		 {##}
+		{##}
 		,`Source_Timestamp`
 		,`Year_Month`
 	FROM  {{template_params['business_unit_name_code']}}_brz_{{template_params['sourceName']|lower}}.{{schema_dict['File']['ObjectName']}}  
@@ -215,10 +181,6 @@ CREATE TABLE {{template_params['main_database']}}.{{schema_dict['File']['ObjectN
 		{%- if  col['DataType'] == 'TIMESTAMP' -%}
 	,`{{col['ColumnName']}}` {%- if col['IsAttributePII'] == True  -%} BINARY {%- else -%} STRING {%- endif -%} {% if  not(col['Nullable']) %} NOT NULL{% endif %}
 	,`{{col['ColumnName']}}_Aet` {%- if col['IsAttributePII'] == True  -%} BINARY {%- else -%}{{col['DataType']}} {%- endif -%} {% if  not(col['Nullable']) %} NOT NULL{% endif %}
-	{##}
-		{%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-	,`{{col['ColumnName']}}` STRING{% if  not(col['Nullable']) %} NOT NULL{% endif %}
-	,`{{col['ColumnName']}}_Cpy` STRING{% if  not(col['Nullable']) %} NOT NULL{% endif %}
 	{##}
 		{%- elif col['IsAttributePII'] == True  -%}
 	,`{{col['ColumnName']}}` BINARY {% if  not(col['Nullable']) %} NOT NULL{% endif %}
