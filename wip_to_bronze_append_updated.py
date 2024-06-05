@@ -16,25 +16,7 @@
 
 # COMMAND ----------
 
-#%run ../utilities/Validate_Library_Installation 
-
-# COMMAND ----------
-
 # MAGIC %run ../utilities/data_quality_validator
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Import PII functionality
-
-# COMMAND ----------
-
-# Disabled temporarily, to be revisited while handling FPE
-#%run ../utilities/pii_functions
-
-# COMMAND ----------
-
-# MAGIC %run ../utilities/PiiExecuteAes
 
 # COMMAND ----------
 
@@ -43,7 +25,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run dp-databricks-logging-py/Logging
+# MAGIC %run deploy/dp-databricks-logging-py/Logging
 
 # COMMAND ----------
 
@@ -126,12 +108,6 @@ from delta.tables import *
 
 # COMMAND ----------
 
-# Disabled temporarily, to be revisited while handling FPE
-#input_regex_nb = re.compile(r"[A-Za-z_0-9]+|[\.@\-\+\)\(\s]")
-#input_c62_nb = FF3Cipher(fpeKey,fpeTweak,radix=62)
-
-# COMMAND ----------
-
 def get_tpl_params(exe_obj):
   '''Create a python dictionary that will be used in addition to the schema dictionary to render Jinja2 templates'''
   tpl_params = {
@@ -142,7 +118,9 @@ def get_tpl_params(exe_obj):
     "business_unit_name_code" : exe_obj.inputs['business_unit_name_code'],
     "process_start_time_stamp" : get_formatted_time_aet(exe_obj.inputs['process_start_time_stamp'],"%Y%m%d%H%M%S%f","%Y-%m-%d %H:%M:%S.%f",'UTC'),  # convert from UTC to AET
     "work_database" : exe_obj.inputs['work_db_prefix'] + exe_obj.inputs['business_unit_name_code'].lower() + '_work',
-    "main_database" : exe_obj.inputs['business_unit_name_code'].lower() + '_brz_' + exe_obj.inputs['source_app_name'].lower()
+    "main_database" : exe_obj.inputs['business_unit_name_code'].lower() + '_brz_' + exe_obj.inputs['source_app_name'].lower(),
+    "secret_scope_name" : "intelliversesecrets",
+    "encryption_key_name" : "adb-encryption-key"
   }
   return tpl_params
 
@@ -172,8 +150,16 @@ def get_brz_table_metrics_by_file(business_unit_name_code, src, obj, process_sta
   df = sql("""SELECT Source_File_Name, COUNT(*) as Record_Count FROM (SELECT * FROM {0}_brz_{1}.{2} WHERE Year_Month='{3}' AND Process_Start_TimeStamp = '{4}') GROUP BY Source_File_Name""".format(business_unit_name_code,src,obj,datetime.strptime(process_start_time_stamp, "%Y-%m-%d %H:%M:%S.%f").strftime("%Y%m"),process_start_time_stamp))
   return {res['Source_File_Name']: res['Record_Count'] for res in map(lambda row: row.asDict(), df.collect())}
 
-# COMMAND ----------
-
+def get_pii_columns(column_tuples_list):
+  '''This function returns a tuple containing a list of detministic columns, a list of non-deterministic columns and the total count of PII columns. The input is a list of (column_name, encryption_type) tuples.'''
+  det_cols = []
+  ndet_cols = []
+  for column_name, encryption_type in column_tuples_list:
+    if encryption_type == 'DET':
+      det_cols.append(column_name)
+    elif encryption_type == 'NDET':
+      ndet_cols.append(column_name)
+  return det_cols,ndet_cols,len(det_cols)+len(ndet_cols)
 
 
 # COMMAND ----------
@@ -200,7 +186,7 @@ try:
     configure_adls_access(lyr_inputs.inputs['business_unit_name_code'])
     
     # start bronze layer execution - kicks off all initial tasks
-    brz_exe = TemplateExecutorBronzeSilver('wip','bronze','quarantine', 'brz', lyr_inputs)
+    brz_exe = TemplateExecutorBronzeSilver('uplift-wip','uplift-bronze','uplift-quarantine', 'brz', lyr_inputs)
 
     # create python dictionary with additional parameters for template rendering
     tpl_params = get_tpl_params(brz_exe)
@@ -216,13 +202,13 @@ try:
         #encrypt_columns(brz_exe.schema_dict['SourceColumns'], brz_exe.inputs['source_app_name'], brz_exe.inputs['object_name'], encryptionTime_int, encryption16BytesString_b, encryptionKey_b, fpeKey, fpeTweak)
       
       dq = DqCheck(brz_exe.inputs['source_app_name'], brz_exe.inputs['object_name'], brz_exe.inputs['pipeline_run_id'], 'brz',brz_exe.inputs['business_unit_name_code'])
-    #   with op_process.operation("Data Quality Check") as op:
-    #     # run data quality checks and end notebook execution if checks failed
-    #     dq.run_dq_check(op)
-    #     op.info("DQ status", extra={"status": dq.dq_status})
-    #     if dq.dq_status == 'fail':
-    #       op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
-    #       raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + '\n' + dq.dq_data_doc_url)
+      with op_process.operation("Data Quality Check") as op:
+        # run data quality checks and end notebook execution if checks failed
+        dq.run_dq_check(op)
+        op.info("DQ status", extra={"status": dq.dq_status})
+        if dq.dq_status == 'fail':
+          op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
+          raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + '\n' + dq.dq_data_doc_url)
 
       # complete execution of bronze queries
       brz_exe.execute_queries(template=brz_load_end(), template_params=tpl_params, query_delim=';;', log=op_process)
