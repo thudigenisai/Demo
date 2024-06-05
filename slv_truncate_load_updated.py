@@ -36,9 +36,6 @@ CREATE TABLE {{template_params['work_database']}}.slv_{{template_params['sourceN
 			{%- if  col['DataType'] == 'TIMESTAMP' -%}
 		,stg.`{{col['ColumnName']}}` 
 		,stg.`{{col['ColumnName']}}_Aet`
-			{%- elif col['IsAttributePII'] == True and col['EncryptionType']=='FPE' -%}
-		,stg.`{{col['ColumnName']}}` 
-		,stg.`{{col['ColumnName']}}_Cpy`
 			{%- else -%}
 		,stg.`{{col['ColumnName']}}`
 			{%- endif -%}  
