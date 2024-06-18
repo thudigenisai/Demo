@@ -16,39 +16,44 @@ CREATE TABLE {{template_params['work_database']}}.{{template_params['worker_tabl
 		`pk_hash` as `pk_hash`
 		,`row_hash` as `row_hash`
 		,`effective_dttm` as `effective_dttm`
-		,CASE 	WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')=''
-		THEN CAST('9999-12-31 00:00:00' as TIMESTAMP)
-		ELSE CAST(COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),NULL)- INTERVAL 1 milliseconds as TIMESTAMP)
+		,CASE 
+		    WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')=''
+		    THEN CAST('9999-12-31 00:00:00' as TIMESTAMP)
+		    ELSE CAST(COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),NULL)- INTERVAL 1 milliseconds as TIMESTAMP)
 		END AS `expiry_dttm`
         ,`source_app_name` as `source_app_name`
-		,CASE WHEN `record_type`<>'D'
-		THEN (
-		CASE	WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')=''
-			THEN 'I'
-			ELSE 'U'
-			END
-		)
-		ELSE 'D' END AS `record_type`
+		,CASE 
+		    WHEN `record_type`<>'D'
+		    THEN (
+		        CASE
+		            WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')=''
+		            THEN 'I'
+		            ELSE 'U'
+		        END
+		    )
+		    ELSE 'D' 
+		END AS `record_type`
 		,`record_insert_dttm` as `record_insert_dttm`
 		,`record_update_dttm` as `record_update_dttm`
 		,`process_instance_id` as `process_instance_id`
 		,`update_process_instance_id` as `update_process_instance_id`
-		,CASE  	WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')='' THEN 'true'
-		ELSE 'false'
+		,CASE 
+		    WHEN COALESCE((MAX(`effective_dttm`)  OVER(PARTITION BY `pk_hash` ORDER BY `RowCnt` DESC ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)),'')='' 
+		    THEN 'true'
+		    ELSE 'false'
 		END AS `is_current`
-		{%- for col in schema_dict['target_columns'] -%}
-		{%- if  not(col['ignore']) or col['is_primary_key_col'] -%} 
-		,`{{col['column_name']}}` as `{{col['column_name']}}`
-        {% endif %}
-		{%- endfor -%}
-		 {##}
-         {% for ik_name in template_params['integration_key_cols_per_name'] %}
-         ,`{{ik_name}}` as `{{ik_name}}`
-         {% endfor %}
+		{% for col in schema_dict['target_columns'] %}
+		    {% if not col['ignore'] or col['is_primary_key_col'] %}
+		        ,`{{col['column_name']}}` as `{{col['column_name']}}`
+            {% endif %}
+		{% endfor %}
+        {% for ik_name in template_params['integration_key_cols_per_name'] %}
+            ,`{{ik_name}}` as `{{ik_name}}`
+        {% endfor %}
 		 ,`year_month` as `year_month`
 	FROM
 	(
-	SELECT ROW_NUMBER() OVER (PARTITION BY `pk_hash` ORDER BY effective_dttm {%- if template_params['hist_stitch_sort_on'] -%},`{{template_params['hist_stitch_sort_col']}}` {%- endif -%}) as `RowCnt`,*
+	SELECT ROW_NUMBER() OVER (PARTITION BY `pk_hash` ORDER BY effective_dttm {% if template_params['hist_stitch_sort_on'] %},`{{template_params['hist_stitch_sort_col']}}` {% endif %}) as `RowCnt`,*
 	FROM 
 		(
 			-- ** Identify worker records to insert **
@@ -68,15 +73,14 @@ CREATE TABLE {{template_params['work_database']}}.{{template_params['worker_tabl
 				,stg.`process_instance_id` 
 				,stg.`update_process_instance_id` 
 				,stg.`is_current`
-				{%- for col in schema_dict['target_columns'] -%}
-                {%- if  not(col['ignore']) or col['is_primary_key_col'] -%} 
-                ,`{{col['column_name']}}` as `{{col['column_name']}}`
-                {% endif %}
-                {%- endfor -%}
-                 {##}
-                 {% for ik_name in template_params['integration_key_cols_per_name'] %}
-                 ,`{{ik_name}}` as `{{ik_name}}`
-                 {% endfor %}
+				{% for col in schema_dict['target_columns'] %}
+                    {% if not col['ignore'] or col['is_primary_key_col'] %} 
+                    ,`{{col['column_name']}}` as `{{col['column_name']}}`
+                    {% endif %}
+                {% endfor %}
+                {% for ik_name in template_params['integration_key_cols_per_name'] %}
+                    ,`{{ik_name}}` as `{{ik_name}}`
+                {% endfor %}
 				,stg.`year_month`
 			FROM {{template_params['work_database']}}.{{template_params['worker_table']}}_stg as stg
 			WHERE NOT EXISTS(SELECT 1 FROM {{template_params['main_database']}}.{{schema_dict['object_name']}} as gld WHERE gld.`pk_hash`=stg.`pk_hash`)
@@ -108,18 +112,17 @@ CREATE TABLE {{template_params['work_database']}}.{{template_params['worker_tabl
 				 ,gld.`process_instance_id` as `process_instance_id`
 				 ,'{{template_params['pipeline_run_id']}}' as `update_process_instance_id`
 				 ,CAST(0 AS BOOLEAN) as `is_current`
-				 {%- for col in schema_dict['target_columns'] -%}
-				     {%- if not col['ignore'] or col['is_primary_key_col'] -%}
-				         {%- if col['adb_encryption_type'] in ['DET', 'NDET'] -%}
+				 {% for col in schema_dict['target_columns'] %}
+				     {% if not col['ignore'] or col['is_primary_key_col'] %}
+				         {% if col['adb_encryption_type'] in ['DET', 'NDET'] %}
 				             ,cast(`{{ col['column_name'] }}` as BINARY) as `{{ col['column_name'] }}`
-				         {%- else -%}
+				         {% else %}
 				             ,`{{ col['column_name'] }}` as `{{ col['column_name'] }}`
-				         {%- endif -%}
-				     {%- endif -%}
-				{%- endfor -%
-                 {##}
+				         {% endif %}
+				     {% endif %}
+				 {% endfor %}
                  {% for ik_name in template_params['integration_key_cols_per_name'] %}
-                 ,`{{ik_name}}` as `{{ik_name}}`
+                     ,`{{ik_name}}` as `{{ik_name}}`
                  {% endfor %}
 				 ,gld.`year_month` as `year_month`
 			FROM {{template_params['main_database']}}.{{schema_dict['object_name']}} as gld
@@ -141,4 +144,5 @@ ANALYZE TABLE {{template_params['work_database']}}.{{template_params['worker_tab
 -- *----------------------------------------------*
 DELETE FROM {{template_params['main_database']}}.{{schema_dict['object_name']}} as gld
 WHERE EXISTS(SELECT 1 FROM {{template_params['work_database']}}.{{template_params['worker_table']}}_load as `load` WHERE `load`.`pk_hash`=gld.`pk_hash` AND `load`.`row_hash`=gld.`row_hash`);;
+
 """
