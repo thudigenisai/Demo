@@ -27,29 +27,13 @@ from pyspark.sql.types import LongType
 from pyspark.sql import Row
 import re
 
+
+
 def get_pii_columns_for_object_as_list(is_first_load, object_name):
     # Get PII columns for a given object
     # object_name:string -> source_object_attribute_name:list
-    if is_first_load is False and spark._jsparkSession.catalog().tableExists('sew_slv_hiaffinity', object_name):
-        q = "SELECT source_object_attribute_name FROM ctlfwk.vw_source_objects_attributes where Column_IS_PII = 'Y' and source_object_name = '{}' ".format(object_name)
-        return ctlfwk_query(q).select('source_object_attribute_name').rdd.flatMap(lambda x: x).collect()
-    else:
-        return []
-    
-def get_pii_columns_for_object_as_list_det(is_first_load, object_name):
-    # Get DET PII columns for a given object
-    # object_name:string -> source_object_attribute_name:list
-    if is_first_load is False and spark._jsparkSession.catalog().tableExists('sew_slv_hiaffinity', object_name):
-        q = "SELECT source_object_attribute_name FROM ctlfwk.vw_source_objects_attributes where Column_IS_PII = 'Y' and Encryption_Type = 'DET' and source_object_name = '{}' ".format(object_name)
-        return ctlfwk_query(q).select('source_object_attribute_name').rdd.flatMap(lambda x: x).collect()
-    else:
-        return []
-
-def get_pii_columns_for_object_as_list_ndet(is_first_load, object_name):
-    # Get NDET PII columns for a given object
-    # object_name:string -> source_object_attribute_name:list
     if is_first_load is False and spark._jsparkSession.catalog().tableExists('sew_slv_hiaffinity_piiview', object_name):
-        q = "SELECT source_object_attribute_name FROM ctlfwk.vw_source_objects_attributes where Column_IS_PII = 'Y' and Encryption_Type = 'NDET' and source_object_name = '{}' ".format(object_name)
+        q = "SELECT source_object_attribute_name FROM ctlfwk.vw_source_objects_attributes where Column_IS_PII = 'Y' and source_object_name = '{}' ".format(object_name)
         return ctlfwk_query(q).select('source_object_attribute_name').rdd.flatMap(lambda x: x).collect()
     else:
         return []
@@ -94,8 +78,7 @@ def rebuild_update_statement(update_statement_list_generator, root_records_pd, o
             new_row_pd[field_name] = pd.to_datetime(field_value, format="%Y-%m-%d %H:%M:%S.%f") if field_name=="changedatetime" and isinstance(field_value, str) else field_value
             # If it's final result, then the type for changedatetime column will be string
             new_row_spark[field_name] = field_value.strftime("%Y-%m-%d %H:%M:%S.%f") if field_name=="changedatetime" and isinstance(field_value, pd._libs.tslibs.timestamps.Timestamp) else field_value
-        new_row_pd_df = pd.DataFrame([new_row_pd])
-        result_pd_format = pd.concat([result_pd_format,new_row_pd_df], ignore_index=True) # Insert into the staging final result dataframe, it will be used for next iteration
+        result_pd_format = result_pd_format.append(new_row_pd, ignore_index=True) # Insert into the staging final result dataframe, it will be used for next iteration
         result_spark_format.append(new_row_spark) # Insert into the final result list and it will be collected by the Spark job.
 
         # Debug only, showing the raw update statements
@@ -116,8 +99,6 @@ def handle_rebuild(is_first_load, source_app, object_name, csv_table_name, cdc_d
 
     # Get pii columns from ctlfwk
     pii_column_names = get_pii_columns_for_object_as_list(is_first_load, object_name)
-    pii_column_names_det = get_pii_columns_for_object_as_list_det(is_first_load, object_name)
-    pii_column_names_ndet = get_pii_columns_for_object_as_list_ndet(is_first_load, object_name)
 
     # Get column name - type from ctlfwk as map
     object_attributes = {}
@@ -128,8 +109,6 @@ def handle_rebuild(is_first_load, source_app, object_name, csv_table_name, cdc_d
     object_attributes = {k.lower(): v for k, v in object_attributes.items()}
     cdc_control_column_names = {v.lower() for v in cdc_control_column_names}
     pii_column_names = {v.lower() for v in pii_column_names}
-    pii_column_names_det = {v.lower() for v in pii_column_names_det}
-    pii_column_names_ndet = {v.lower() for v in pii_column_names_ndet}
 
     # Convert column names to select string
     col_sql = "".join(["`" + attributes_name + "`," for attributes_name in list(object_attributes.keys())]).rstrip(',')
@@ -159,22 +138,12 @@ def handle_rebuild(is_first_load, source_app, object_name, csv_table_name, cdc_d
     # All the insert statements from CDC csv files will be the history root records
     root_records_df = insert_df.join(update_df,insert_df["_recid"] == update_df["_recid"],"inner").select("cdc_insert.*").select(col_sql.split(","))
     # Finding the history root records from silver table if it's not a first load
-    if is_first_load is False and spark._jsparkSession.catalog().tableExists('sew_slv_hiaffinity', object_name): # Get the decrypted values from piiview table
+    if is_first_load is False and spark._jsparkSession.catalog().tableExists('sew_slv_hiaffinity_piiview', object_name): # Get the decrypted values from piiview table
         # Inner join the "update_df" and the "silver_table" (join key: "_Recid"), select the required columns from "silver_table" and create a table to store the results: "history_root_table". Please note: the records from "silver_table" for each "_Recid" should have the greatest value of "ChangeDateTime" column
-        slv_df = spark.sql("SELECT {} ,ROW_NUMBER() OVER(PARTITION BY `_recid` ORDER BY `ChangeDateTime_Aet` DESC) AS `ROW_NUMBER` FROM sew_slv_hiaffinity.{}".format(col_sql, object_name)).filter(col("ROW_NUMBER")==1).drop("ROW_NUMBER").alias('slv')# Only select the latest record for given _recid
+        slv_df = spark.sql("SELECT {} ,ROW_NUMBER() OVER(PARTITION BY `_recid` ORDER BY `ChangeDateTime_Aet` DESC) AS `ROW_NUMBER` FROM sew_slv_hiaffinity_piiview.{}".format(col_sql_pii, object_name)).filter(col("ROW_NUMBER")==1).drop("ROW_NUMBER").alias('slv')# Only select the latest record for given _recid
         root_slv_df = slv_df.join(update_df,slv_df["_recid"] == update_df["_recid"],"inner").select("slv.*") # Do the inner join and only select the columns from silver table
-        root_slv_df.createOrReplaceTempView("root_slv_df_tmp")
-        pii_col_query_list = []
-        if len(pii_column_names_det) > 0:
-            for pii_column_name_det in pii_column_names_det:
-                pii_col_query_list.append(", decrypt_scala_det_binary(`{0}`) as `{0}_pii`".format(pii_column_name_det))
-        if len(pii_column_names_ndet) > 0:
-            for pii_column_name_ndet in pii_column_names_ndet:
-                pii_col_query_list.append(", decrypt_scala_ndet_binary(`{0}`) as `{0}_pii`".format(pii_column_name_ndet))
-        select_pii = "".join(q for q in pii_col_query_list)
-        root_slv_df = spark.sql("select * {0} from root_slv_df_tmp".format(select_pii))
         # Drop encrypted columns and rename _pii columns to it's original names. 
-        for pii_column_name in pii_column_names:      
+        for pii_column_name in pii_column_names:
             root_slv_df = root_slv_df.drop(pii_column_name).withColumnRenamed(pii_column_name+"_pii", pii_column_name)
         # Convert all values to String
         root_slv_df = root_slv_df.select([col(c).cast("string") for c in root_slv_df.columns]).select(col_sql.split(","))
