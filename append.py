@@ -16,10 +16,6 @@
 
 # COMMAND ----------
 
-#%run ../utilities/Validate_Library_Installation 
-
-# COMMAND ----------
-
 # MAGIC %run ../utilities/data_quality_validator
 
 # COMMAND ----------
@@ -53,6 +49,10 @@
 # COMMAND ----------
 
 # MAGIC %run ../patterns/brz_load_start
+
+# COMMAND ----------
+
+# MAGIC %run ../patterns/brz_hard_deletes
 
 # COMMAND ----------
 
@@ -143,6 +143,8 @@ def get_tpl_params(exe_obj):
     "process_start_time_stamp" : get_formatted_time_aet(exe_obj.inputs['process_start_time_stamp'],"%Y%m%d%H%M%S%f","%Y-%m-%d %H:%M:%S.%f",'UTC'),  # convert from UTC to AET
     "work_database" : exe_obj.inputs['work_db_prefix'] + exe_obj.inputs['business_unit_name_code'].lower() + '_work',
     "main_database" : exe_obj.inputs['business_unit_name_code'].lower() + '_brz_' + exe_obj.inputs['source_app_name'].lower(),
+    "prev_process_start_time_stamp": exe_obj.inputs['prev_process_start_time_stamp'],
+    "main_database_slv": exe_obj.inputs['business_unit_name_code'].lower() + '_slv_' + exe_obj.inputs['source_app_name'].lower(),
     "secret_scope_name" : "acumen-key-vault-scope",
     "encryption_key_name" : "adb-encryption-key-v2"
   }
@@ -176,10 +178,6 @@ def get_brz_table_metrics_by_file(business_unit_name_code, src, obj, process_sta
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ### Run bronze load
 # MAGIC * Create instance of Layer Process class
@@ -192,7 +190,7 @@ def get_brz_table_metrics_by_file(business_unit_name_code, src, obj, process_sta
 try:
   with logging_start("WipToBronze",  dbutils.widgets.get('pipeline_run_id')) as log:
     mandatory = ['pipeline_run_id', 'source_app_name',  'object_name', 'process_start_time_stamp', 'json_schema','business_unit_name_code']
-    optional = ['adls_prefix', 'enable_debug_in_databricks', 'work_db_prefix', 'main_db_prefix', 'storage_account']
+    optional = ['adls_prefix', 'enable_debug_in_databricks', 'work_db_prefix', 'main_db_prefix', 'storage_account', 'prev_process_start_time_stamp']
 
     # get inputs from ADF, make python dictionary of schema information and validate schema
     lyr_inputs = LayerInputs(mandatory,optional)
@@ -218,14 +216,16 @@ try:
         #encrypt_columns(brz_exe.schema_dict['SourceColumns'], brz_exe.inputs['source_app_name'], brz_exe.inputs['object_name'], encryptionTime_int, encryption16BytesString_b, encryptionKey_b, fpeKey, fpeTweak)
       
       dq = DqCheck(brz_exe.inputs['source_app_name'], brz_exe.inputs['object_name'], brz_exe.inputs['pipeline_run_id'], 'brz',brz_exe.inputs['business_unit_name_code'])
-    #   with op_process.operation("Data Quality Check") as op:
-    #     # run data quality checks and end notebook execution if checks failed
-    #     dq.run_dq_check(op)
-    #     op.info("DQ status", extra={"status": dq.dq_status})
-    #     if dq.dq_status == 'fail':
-    #       op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
-    #       raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + '\n' + dq.dq_data_doc_url)
-
+      with op_process.operation("Data Quality Check") as op:
+        # run data quality checks and end notebook execution if checks failed
+        dq.run_dq_check(op)
+        op.info("DQ status", extra={"status": dq.dq_status})
+        if dq.dq_status == 'fail':
+          op.warning('DQ check failed', extra={"dq_message": dq.dq_message})
+          raise Exception('Notebook execution stopped due to DQ check: ' + dq.dq_message + '\n' + dq.dq_data_doc_url)
+      
+      if tpl_params['prev_process_start_time_stamp'] != '19000101000000000' and brz_exe.schema_dict ['File']['DetectHardDeletes'] == 'Y':
+            brz_exe.execute_queries(template=brz_hard_deletes(), template_params=tpl_params, query_delim=';;', log=op_process)
       # complete execution of bronze queries
       brz_exe.execute_queries(template=brz_load_end(), template_params=tpl_params, query_delim=';;', log=op_process)
       
@@ -251,3 +251,7 @@ except BaseException as e:
 
 # push data_doc_url to ADF
 dbutils.notebook.exit(dq.dq_data_doc_url)
+
+# COMMAND ----------
+
+
